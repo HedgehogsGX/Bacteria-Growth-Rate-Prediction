@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Improved Model Trainer - 使用清理后的数据和生物学约束训练改进模型
-"""
 
 import pandas as pd
 import numpy as np
@@ -13,6 +10,8 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
+import json
+import os
 
 class ImprovedBacteriaGrowthModel:
     def __init__(self):
@@ -20,32 +19,117 @@ class ImprovedBacteriaGrowthModel:
         self.genus_encoder = LabelEncoder()
         self.species_encoder = LabelEncoder()
         self.scaler = StandardScaler()
+        self.data_split_config = "data_split_config.json"
         
     def biological_continuity_loss(self, y_true, y_pred):
-        """生物学连续性损失函数 - 惩罚相邻时间点的剧烈变化"""
-
-        # 基础MSE损失
         mse_loss = tf.reduce_mean(tf.square(y_true - y_pred))
-
-        # 连续性损失 - 惩罚相邻时间点的剧烈变化
         diff_true = y_true[:, 1:] - y_true[:, :-1]
         diff_pred = y_pred[:, 1:] - y_pred[:, :-1]
         continuity_loss = tf.reduce_mean(tf.square(diff_true - diff_pred))
-
-        # 单调性损失 - 在早期阶段（前8小时）惩罚剧烈下降
-        early_pred = y_pred[:, :8]  # 前8个时间点
+        early_pred = y_pred[:, :8]
         early_diff = early_pred[:, 1:] - early_pred[:, :-1]
-        # 惩罚负的变化（下降）
         monotonic_penalty = tf.reduce_mean(tf.maximum(-early_diff, 0.0))
-
-        # 零值惩罚 - 强烈惩罚预测为零或极小值
-        zero_penalty = tf.reduce_mean(tf.maximum(3.0 - y_pred, 0.0))  # log10(1000) ≈ 3.0
-
-        # 组合损失
+        zero_penalty = tf.reduce_mean(tf.maximum(3.0 - y_pred, 0.0))
         total_loss = mse_loss + 0.1 * continuity_loss + 0.2 * monotonic_penalty + 0.5 * zero_penalty
-
         return total_loss
-    
+
+    def create_data_split(self, data, train_size=0.6, val_size=0.2, test_size=0.2, random_state=42):
+        print(f"📊 Creating data split configuration...")
+        print(f"   Train: {train_size*100:.0f}%, Validation: {val_size*100:.0f}%, Test: {test_size*100:.0f}%")
+        assert abs(train_size + val_size + test_size - 1.0) < 1e-6, "Split sizes must sum to 1.0"
+
+        total_samples = len(data['genus'])
+        indices = np.arange(total_samples)
+
+        # First split: separate test set (stratified by genus)
+        train_val_indices, test_indices = train_test_split(
+            indices,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=data['genus']
+        )
+
+        # Second split: separate train and validation from remaining data
+        val_size_adjusted = val_size / (train_size + val_size)  # Adjust validation size
+        train_indices, val_indices = train_test_split(
+            train_val_indices,
+            test_size=val_size_adjusted,
+            random_state=random_state,
+            stratify=data['genus'][train_val_indices]
+        )
+
+        # Create split configuration
+        split_config = {
+            'train_indices': train_indices.tolist(),
+            'val_indices': val_indices.tolist(),
+            'test_indices': test_indices.tolist(),
+            'train_size': len(train_indices),
+            'val_size': len(val_indices),
+            'test_size': len(test_indices),
+            'total_size': total_samples,
+            'random_state': random_state,
+            'created_timestamp': pd.Timestamp.now().isoformat()
+        }
+
+        # Save configuration
+        with open(self.data_split_config, 'w') as f:
+            json.dump(split_config, f, indent=2)
+
+        print(f"✅ Data split configuration saved to: {self.data_split_config}")
+        print(f"   Training set: {len(train_indices)} samples ({len(train_indices)/total_samples*100:.1f}%)")
+        print(f"   Validation set: {len(val_indices)} samples ({len(val_indices)/total_samples*100:.1f}%)")
+        print(f"   Test set: {len(test_indices)} samples ({len(test_indices)/total_samples*100:.1f}%)")
+
+        return split_config
+
+    def load_data_split(self):
+        """Load existing data split configuration"""
+
+        if not os.path.exists(self.data_split_config):
+            return None
+
+        with open(self.data_split_config, 'r') as f:
+            split_config = json.load(f)
+
+        print(f"📂 Loaded existing data split configuration:")
+        print(f"   Training set: {split_config['train_size']} samples")
+        print(f"   Validation set: {split_config['val_size']} samples")
+        print(f"   Test set: {split_config['test_size']} samples")
+        print(f"   Created: {split_config['created_timestamp']}")
+
+        return split_config
+
+    def apply_data_split(self, data, split_config):
+        """Apply data split configuration to create train/val/test sets"""
+
+        train_indices = np.array(split_config['train_indices'])
+        val_indices = np.array(split_config['val_indices'])
+        test_indices = np.array(split_config['test_indices'])
+
+        # Create data splits
+        splits = {
+            'train': {
+                'genus': data['genus'][train_indices],
+                'species': data['species'][train_indices],
+                'env': data['env'][train_indices],
+                'density_log': data['density_log'][train_indices]
+            },
+            'val': {
+                'genus': data['genus'][val_indices],
+                'species': data['species'][val_indices],
+                'env': data['env'][val_indices],
+                'density_log': data['density_log'][val_indices]
+            },
+            'test': {
+                'genus': data['genus'][test_indices],
+                'species': data['species'][test_indices],
+                'env': data['env'][test_indices],
+                'density_log': data['density_log'][test_indices]
+            }
+        }
+
+        return splits
+
     def create_improved_model(self, num_genera, num_species):
         """创建改进的模型架构"""
         
@@ -131,7 +215,7 @@ class ImprovedBacteriaGrowthModel:
             'density_log': density_log
         }
     
-    def train_model(self, csv_file, epochs=100, batch_size=32):
+    def train_model(self, csv_file, epochs=100, batch_size=32, force_new_split=False):
         """训练改进的模型"""
         
         # 准备数据
@@ -152,25 +236,37 @@ class ImprovedBacteriaGrowthModel:
         print(f"\n🏗️  模型架构:")
         self.model.summary()
         
-        # 准备训练数据
-        X = {
-            'genus_input': data['genus'],
-            'species_input': data['species'],
-            'env_input': data['env']
+        # 检查是否存在数据划分配置
+        split_config = self.load_data_split()
+
+        if split_config is None or force_new_split:
+            print(f"🔄 Creating new data split...")
+            split_config = self.create_data_split(data)
+        else:
+            print(f"📂 Using existing data split configuration")
+
+        # 应用数据划分
+        splits = self.apply_data_split(data, split_config)
+
+        # 准备训练和验证数据
+        X_train = {
+            'genus_input': splits['train']['genus'],
+            'species_input': splits['train']['species'],
+            'env_input': splits['train']['env']
         }
-        y = data['density_log']
-        
-        # 分割训练和验证数据
-        X_train = {}
-        X_val = {}
-        for key in X.keys():
-            X_train[key], X_val[key], y_train, y_val = train_test_split(
-                X[key], y, test_size=0.2, random_state=42
-            )
-        
-        print(f"\n📊 数据分割:")
-        print(f"   训练集: {len(y_train)} 样本")
-        print(f"   验证集: {len(y_val)} 样本")
+        y_train = splits['train']['density_log']
+
+        X_val = {
+            'genus_input': splits['val']['genus'],
+            'species_input': splits['val']['species'],
+            'env_input': splits['val']['env']
+        }
+        y_val = splits['val']['density_log']
+
+        print(f"\n📊 Final data split for training:")
+        print(f"   Training set: {len(y_train)} samples ({len(y_train)/len(data['genus'])*100:.1f}%)")
+        print(f"   Validation set: {len(y_val)} samples ({len(y_val)/len(data['genus'])*100:.1f}%)")
+        print(f"   Test set: {split_config['test_size']} samples ({split_config['test_size']/len(data['genus'])*100:.1f}%) - RESERVED")
         
         # 回调函数
         callbacks = [
@@ -180,6 +276,7 @@ class ImprovedBacteriaGrowthModel:
         
         # 训练模型
         print(f"\n🚀 开始训练...")
+        print(f"⚠️  注意: 测试集在训练过程中完全不可见，仅用于最终评估")
         history = self.model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),

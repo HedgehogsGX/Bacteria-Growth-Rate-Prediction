@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Improved Bacteria Growth Predictor - 使用改进模型和生物学约束的预测器
-"""
 
 import numpy as np
 import pandas as pd
@@ -18,7 +15,6 @@ class ImprovedBacteriaPredictor:
         self.species_encoder = LabelEncoder()
         self.scaler = StandardScaler()
 
-        # 属名-生态特征映射表
         self.genus_eco_map = {
             "Thermus": {
                 "naming_source": "Greek 'thermós' (heat)",
@@ -26,7 +22,7 @@ class ImprovedBacteriaPredictor:
                 "opt_ph": (7.0, 8.5),
                 "habitat": "hot springs, thermal environments",
                 "growth_type": "thermophile",
-                "model_substitute": "Bacillus"  # 当前模型中的替代
+                "model_substitute": "Bacillus"
             },
             "Bacillus": {
                 "naming_source": "Latin 'bacillus' (small rod)",
@@ -73,7 +69,6 @@ class ImprovedBacteriaPredictor:
         self.load_model_and_setup()
     
     def biological_continuity_loss(self, y_true, y_pred):
-        """生物学连续性损失函数 - 与训练时保持一致"""
         mse_loss = tf.reduce_mean(tf.square(y_true - y_pred))
         diff_true = y_true[:, 1:] - y_true[:, :-1]
         diff_pred = y_pred[:, 1:] - y_pred[:, :-1]
@@ -86,7 +81,6 @@ class ImprovedBacteriaPredictor:
         return total_loss
     
     def load_model_and_setup(self):
-        """加载模型并设置编码器"""
         
         print(f"📂 Loading improved model: {self.model_path}")
         try:
@@ -123,16 +117,13 @@ class ImprovedBacteriaPredictor:
         print(f"   - Species: {', '.join(self.species_encoder.classes_[:5])}... ({len(self.species_encoder.classes_)} total)")
     
     def validate_ecological_parameters(self, genus, ph, temperature):
-        """Validate and correct ecological parameters"""
-
-        original_genus = genus
         corrected_params = {"genus": genus, "ph": ph, "temperature": temperature}
         warnings = []
 
         if genus in self.genus_eco_map:
             eco_data = self.genus_eco_map[genus]
 
-            # Check if temperature matches ecological characteristics
+
             opt_temp_min, opt_temp_max = eco_data["opt_temp"]
             if not (opt_temp_min <= temperature <= opt_temp_max):
                 corrected_temp = (opt_temp_min + opt_temp_max) / 2
@@ -140,7 +131,7 @@ class ImprovedBacteriaPredictor:
                 warnings.append(f"   Input temperature {temperature}°C unsuitable, suggest correcting to {corrected_temp:.1f}°C")
                 corrected_params["temperature"] = corrected_temp
 
-            # Check pH match
+
             opt_ph_min, opt_ph_max = eco_data["opt_ph"]
             if not (opt_ph_min <= ph <= opt_ph_max):
                 corrected_ph = (opt_ph_min + opt_ph_max) / 2
@@ -148,7 +139,7 @@ class ImprovedBacteriaPredictor:
                 warnings.append(f"   Input pH {ph} unsuitable, suggest correcting to {corrected_ph:.1f}")
                 corrected_params["ph"] = corrected_ph
 
-            # Use model substitute genus
+
             model_genus = eco_data["model_substitute"]
             if model_genus != genus:
                 warnings.append(f"🔄 Using {model_genus} model to predict {genus} growth characteristics")
@@ -157,10 +148,7 @@ class ImprovedBacteriaPredictor:
         return corrected_params, warnings
 
     def predict_growth(self, bacteria_name, ph, temperature):
-        """Predict bacterial growth curve"""
-
         try:
-            # Parse bacteria name
             parts = bacteria_name.strip().split()
             if len(parts) < 2:
                 return None, "Bacteria name must contain genus and species (e.g., 'Escherichia coli')"
@@ -168,7 +156,7 @@ class ImprovedBacteriaPredictor:
             original_genus = parts[0]
             species = ' '.join(parts[1:])
 
-            # Ecological validation and correction
+
             corrected_params, eco_warnings = self.validate_ecological_parameters(
                 original_genus, ph, temperature
             )
@@ -177,7 +165,7 @@ class ImprovedBacteriaPredictor:
             final_ph = corrected_params["ph"]
             final_temp = corrected_params["temperature"]
 
-            # Display ecological correction information
+
             if eco_warnings:
                 print(f"\n🧬 Ecological Analysis:")
                 if original_genus in self.genus_eco_map:
@@ -188,46 +176,44 @@ class ImprovedBacteriaPredictor:
                     print(f"   {warning}")
                 print()
 
-            # Check if within model's known range
             if genus not in self.genus_encoder.classes_:
-                genus = self.genus_encoder.classes_[0]  # Use default
+                genus = self.genus_encoder.classes_[0]
                 print(f"⚠️  Unknown genus '{corrected_params['genus']}' in model, using '{genus}'")
 
             if species not in self.species_encoder.classes_:
-                species = self.species_encoder.classes_[0]  # Use default
+                species = self.species_encoder.classes_[0]
                 print(f"⚠️  Unknown species '{' '.join(parts[1:])}' in model, using '{species}'")
-            
-            # 编码输入
+
             genus_encoded = self.genus_encoder.transform([genus])[0]
             species_encoded = self.species_encoder.transform([species])[0]
             
-            # 标准化环境参数 - 使用修正后的参数
+
             env_normalized = self.scaler.transform([[final_ph, final_temp]])
 
-            # 准备模型输入
+
             X = {
                 'genus_input': np.array([[genus_encoded]]),
                 'species_input': np.array([[species_encoded]]),
                 'env_input': env_normalized
             }
 
-            # 进行预测
+
             prediction = self.model.predict(X, verbose=0)
             growth_curve_log = prediction[0]
 
-            # 转换回原始密度值
+
             growth_curve = 10 ** growth_curve_log
 
-            # 应用轻微的生物学约束（改进模型应该已经很好了）
+
             growth_curve = self._light_biological_constraints(growth_curve)
 
-            # 如果是嗜热菌，应用特殊的生长修正
+
             if original_genus in self.genus_eco_map:
                 eco_data = self.genus_eco_map[original_genus]
                 if eco_data["growth_type"] == "thermophile":
                     growth_curve = self._apply_thermophile_correction(growth_curve, final_temp)
 
-            # 计算关键指标
+
             max_density = np.max(growth_curve)
             final_density = growth_curve[-1]
 
@@ -248,18 +234,14 @@ class ImprovedBacteriaPredictor:
             return None, f"Prediction error: {str(e)}"
 
     def _apply_thermophile_correction(self, growth_curve, temperature):
-        """Apply special growth correction for thermophiles"""
-
-        # Growth characteristics of thermophiles at non-optimal temperatures
-        if temperature < 50:  # Below thermophile suitable temperature
-            # Extend lag phase, reduce maximum density
+        if temperature < 50:
             corrected_curve = growth_curve.copy()
 
-            # Extend lag phase (slower growth in first 6 hours)
+
             for i in range(6):
                 corrected_curve[i] = growth_curve[i] * 0.3
 
-            # Reduce overall growth rate
+
             for i in range(6, 24):
                 corrected_curve[i] = growth_curve[i] * 0.6
 
@@ -268,31 +250,24 @@ class ImprovedBacteriaPredictor:
         return growth_curve
 
     def _light_biological_constraints(self, growth_curve):
-        """Light biological constraints - improved model should already be good"""
-
-        # 确保最小密度
         growth_curve = np.maximum(growth_curve, 1e3)
 
-        # 轻微平滑异常值
         for i in range(1, len(growth_curve)-1):
-            # 如果某个点与前后点差异过大，进行轻微调整
             prev_val = growth_curve[i-1]
             next_val = growth_curve[i+1] if i+1 < len(growth_curve) else growth_curve[i]
             current_val = growth_curve[i]
 
-            # 如果当前值与前后值差异过大，进行插值
             if current_val > prev_val * 50 or current_val < prev_val * 0.02:
                 growth_curve[i] = (prev_val + next_val) / 2
 
         return growth_curve
     
     def display_prediction(self, result):
-        """Display prediction results"""
 
         print(f"\n📊 Prediction Results:")
         print(f"   - Bacteria: {result['bacteria']}")
 
-        # Display condition correction information
+
         if 'original_conditions' in result:
             orig_ph = result['original_conditions']['ph']
             orig_temp = result['original_conditions']['temperature']
@@ -310,7 +285,7 @@ class ImprovedBacteriaPredictor:
         print(f"   - Maximum density: {result['max_density']:.2e} CFU/mL")
         print(f"   - Final density: {result['final_density']:.2e} CFU/mL")
 
-        # Display ecological correction summary
+
         if 'ecological_corrections' in result and result['ecological_corrections']:
             print(f"\n🧬 Ecological Correction Summary:")
             for correction in result['ecological_corrections']:
@@ -325,7 +300,6 @@ class ImprovedBacteriaPredictor:
             print(f"{i:4d} | {density:.2e}")
     
     def plot_growth_curve(self, result):
-        """绘制生长曲线"""
 
         # 设置中文字体
         plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
@@ -355,12 +329,11 @@ class ImprovedBacteriaPredictor:
         plt.show()
 
 def main():
-    """Main function - Interactive prediction"""
 
     print("🧬 Advanced Bacterial Growth Prediction Tool")
     print("=" * 50)
 
-    # Initialize predictor
+
     predictor = ImprovedBacteriaPredictor()
 
     while True:
@@ -383,17 +356,17 @@ def main():
 
             print(f"\n🔄 Predicting growth of {bacteria}...")
 
-            # Make prediction
+
             result, error = predictor.predict_growth(bacteria, ph, temperature)
 
             if error:
                 print(f"❌ {error}")
                 continue
 
-            # Display results
+
             predictor.display_prediction(result)
 
-            # Ask if plot is needed
+
             plot_choice = input(f"\n📊 Plot growth curve? (y/n): ").strip().lower()
             if plot_choice == 'y':
                 predictor.plot_growth_curve(result)
